@@ -16,14 +16,20 @@ var JobQeue = make(chan Job, 100)
 
 func main() {
 	var wg sync.WaitGroup
-	wg.Add(1)
-	go JobWorker(&wg)
+	const workerPoolSize = 3
 
-	for i := 0; i <= 3; i++ {
+	for range workerPoolSize {
+		wg.Add(1)
+		go JobWorker(&wg)
+	}
+
+	for i := 0; i < 3; i++ {
 		JobSubmitter(Job{Id: i, Name: "Test1", BuildDuration: time.Second})
 
 	}
+
 	close(JobQeue)
+
 	// wating for goroutines to finish executions
 	wg.Wait()
 }
