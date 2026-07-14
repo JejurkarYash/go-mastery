@@ -73,10 +73,13 @@ func main() {
 		go JobWorker(&wg, NewJobStore)
 	}
 	// pushing the job into jobqueue
-	for i := 0; i < 3; i++ {
-		JobSubmitter(&wg, Job{Id: i, Name: "Test", BuildDuration: time.Second, currentAttempt: 0, failedAttempts: i}, NewJobStore)
-	}
-
+	// for i := 0; i < 3; i++ {
+	//   JobSubmitter(&wg, Job{Id: i, Name: "Test", BuildDuration: time.Second, currentAttempt: 0, failedAttempts: i}, NewJobStore)
+	// }
+	JobSubmitter(&wg, Job{Id: 1, Name: "Test", BuildDuration: time.Second, currentAttempt: 0, failedAttempts: 0}, NewJobStore)
+	JobSubmitter(&wg, Job{Id: 2, Name: "Test", BuildDuration: time.Second, currentAttempt: 0, failedAttempts: 1}, NewJobStore)
+	JobSubmitter(&wg, Job{Id: 3, Name: "Test", BuildDuration: time.Second, currentAttempt: 0, failedAttempts: 2}, NewJobStore)
+	JobSubmitter(&wg, Job{Id: 4, Name: "Test", BuildDuration: time.Second, currentAttempt: 0, failedAttempts: 4}, NewJobStore)
 	// wating for goroutines to finish executions
 	wg.Wait()
 	// closing the queue
@@ -99,8 +102,10 @@ func JobWorker(wg *sync.WaitGroup, s *JobStore) {
 			s.SetStatus(job.Id, statusFailed)
 			fmt.Println(err)
 			if job.currentAttempt < MaxFailedRetry {
-				// Retry Logic
-				RetryFailedJob(s, job)
+				// Retry Logic (spawning a new goroutine )
+				delay := time.Second * time.Duration(
+					1<<(job.currentAttempt-1))
+				RetryFailedJob(s, job, delay)
 			} else {
 				fmt.Println("id:", job.Id, "failed")
 				// permanently failed
@@ -124,8 +129,11 @@ func BuildJob(job Job) error {
 	return nil
 }
 
-func RetryFailedJob(s *JobStore, job Job) {
-	s.SetStatus(job.Id, statusPending)
-	fmt.Println("id:", job.Id, "status:", s.GetStatus(job.Id))
-	JobQeue <- job
+func RetryFailedJob(s *JobStore, job Job, delay time.Duration) {
+	go func() {
+		time.Sleep(delay)
+		s.SetStatus(job.Id, statusPending)
+		fmt.Println("id:", job.Id, "status:", s.GetStatus(job.Id))
+		JobQeue <- job
+	}()
 }
