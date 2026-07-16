@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/signal"
@@ -32,7 +33,7 @@ const (
 // jobstore used to store the status -> db
 type JobStore struct {
 	mu       sync.RWMutex
-	statuses map[int]JobStatus
+	statuses map[int]JobStatus ``
 }
 
 // methods for setting status
@@ -41,6 +42,8 @@ func (s *JobStore) SetStatus(jobId int, jobStatus JobStatus) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.statuses[jobId] = jobStatus
+	// saving the logs to file
+	s.SaveToFile()
 }
 
 // mehtod for getting status
@@ -52,6 +55,22 @@ func (s *JobStore) GetStatus(jobId int) JobStatus {
 		return value
 	}
 	return ""
+}
+
+// method for writing to file
+func (s *JobStore) SaveToFile() error {
+	bytes, jsonErr := json.Marshal(s.statuses)
+	if jsonErr != nil {
+		fmt.Print("Error: failed to convert json:", jsonErr)
+		return jsonErr
+	}
+
+	err := os.WriteFile("jobs.json", bytes, 0644)
+	if err != nil {
+		fmt.Print("Error: failed to persist status to disk:", err)
+		return err
+	}
+	return nil
 }
 
 type Metrics struct {
@@ -218,10 +237,10 @@ func BuildJob(job Job) error {
 }
 
 func RetryFailedJob(s *JobStore, job Job, delay time.Duration, ctx context.Context) {
+
 	go func() {
 		select {
 		case <-time.After(delay):
-
 			select {
 			case <-ctx.Done():
 				return
