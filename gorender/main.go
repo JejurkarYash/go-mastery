@@ -54,14 +54,56 @@ func (s *JobStore) GetStatus(jobId int) JobStatus {
 	return ""
 }
 
+type Metrics struct {
+	mu            sync.RWMutex
+	JobsSubmitted int
+	JobsCompleted int
+	JobsFailed    int
+	JobsActive    int
+}
+
+func (m *Metrics) SetJobsSubmitted(n int) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.JobsSubmitted += n
+}
+
+func (m *Metrics) SetJobsCompleted(n int) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.JobsCompleted += n
+}
+
+func (m *Metrics) SetJobsFailed(n int) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.JobsFailed += n
+}
+
+func (m *Metrics) SetJobActive(n int) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.JobsActive += n
+}
+
+func (m *Metrics) GetMetrics() {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	fmt.Printf("Total Jobs:%d \n Completed:%d \n Failed:%d \n Active:%d", m.JobsSubmitted, m.JobsCompleted, m.JobsFailed, m.JobsActive)
+}
+
 // creating a jobqueue with 100 predefine size
 var JobQeue = make(chan Job, 100)
 
-// constructor function
+// constructor function for intitalizing jobsStore
 func NewJobStore() *JobStore {
 	return &JobStore{
 		statuses: make(map[int]JobStatus),
 	}
+}
+
+func NewMetrics() *Metrics {
+	return &Metrics{}
 }
 
 const MaxFailedRetry = 3
@@ -69,6 +111,7 @@ const MaxFailedRetry = 3
 func main() {
 	// initializing the empty store
 	NewJobStore := NewJobStore()
+	NewMetrics := NewMetrics()
 
 	// handling gracefull shutdown
 	// registering the interupptions
@@ -85,14 +128,14 @@ func main() {
 	// spawning the worker
 	for range workerPoolSize {
 		workerWg.Add(1)
-		go JobWorker(&jobWg, &workerWg, NewJobStore, ctx)
+		go JobWorker(&jobWg, &workerWg, NewJobStore, ctx, NewMetrics)
 	}
 
 	// pushing jobs to queue
-	JobSubmitter(&jobWg, Job{Id: 1, Name: "Test", BuildDuration: time.Second, currentAttempt: 0, failedAttempts: 0}, NewJobStore)
-	JobSubmitter(&jobWg, Job{Id: 2, Name: "Test", BuildDuration: time.Second, currentAttempt: 0, failedAttempts: 1}, NewJobStore)
-	JobSubmitter(&jobWg, Job{Id: 3, Name: "Test", BuildDuration: time.Second, currentAttempt: 0, failedAttempts: 2}, NewJobStore)
-	JobSubmitter(&jobWg, Job{Id: 4, Name: "Test", BuildDuration: time.Second, currentAttempt: 0, failedAttempts: 4}, NewJobStore)
+	JobSubmitter(&jobWg, Job{Id: 1, Name: "Test", BuildDuration: time.Second, currentAttempt: 0, failedAttempts: 0}, NewJobStore, NewMetrics)
+	JobSubmitter(&jobWg, Job{Id: 2, Name: "Test", BuildDuration: time.Second, currentAttempt: 0, failedAttempts: 1}, NewJobStore, NewMetrics)
+	JobSubmitter(&jobWg, Job{Id: 3, Name: "Test", BuildDuration: time.Second, currentAttempt: 0, failedAttempts: 2}, NewJobStore, NewMetrics)
+	JobSubmitter(&jobWg, Job{Id: 4, Name: "Test", BuildDuration: time.Second, currentAttempt: 0, failedAttempts: 4}, NewJobStore, NewMetrics)
 
 	// wating for goroutines to finish executions
 	jobsDone := make(chan struct{})
@@ -113,17 +156,18 @@ func main() {
 	close(JobQeue)
 	workerWg.Wait()
 	// closing the queue
+	NewMetrics.GetMetrics()
 }
-func JobSubmitter(jobWg *sync.WaitGroup, job Job, s *JobStore) {
+func JobSubmitter(jobWg *sync.WaitGroup, job Job, s *JobStore, m *Metrics) {
+	m.SetJobsSubmitted(1)
 	jobWg.Add(1)
 	s.SetStatus(job.Id, statusPending)
 	fmt.Println("id:", job.Id, "status:", s.GetStatus(job.Id))
 	JobQeue <- job
 }
-func JobWorker(jobWg *sync.WaitGroup, workerWg *sync.WaitGroup, s *JobStore, ctx context.Context) {
+func JobWorker(jobWg *sync.WaitGroup, workerWg *sync.WaitGroup, s *JobStore, ctx context.Context, m *Metrics) {
 
 	defer workerWg.Done()
-
 	for {
 		select {
 		case <-ctx.Done():
@@ -134,6 +178,7 @@ func JobWorker(jobWg *sync.WaitGroup, workerWg *sync.WaitGroup, s *JobStore, ctx
 				return
 			}
 			s.SetStatus(job.Id, statusRunning)
+			m.SetJobActive(1)
 			err := BuildJob(job)
 			job.currentAttempt += 1
 			if err != nil {
@@ -143,10 +188,13 @@ func JobWorker(jobWg *sync.WaitGroup, workerWg *sync.WaitGroup, s *JobStore, ctx
 					// Retry Logic (spawning a new goroutine )
 					delay := time.Second * time.Duration(
 						1<<(job.currentAttempt-1))
-					RetryFailedJob(s, job, delay)
+					RetryFailedJob(s, job, delay, ctx)
+					m.SetJobActive(-1)
 				} else {
 					fmt.Println("id:", job.Id, "failed")
 					// permanently failed
+					m.SetJobsFailed(1)
+					m.SetJobActive(-1)
 					jobWg.Done()
 				}
 				continue
@@ -154,6 +202,8 @@ func JobWorker(jobWg *sync.WaitGroup, workerWg *sync.WaitGroup, s *JobStore, ctx
 			fmt.Println("id:", job.Id, "status:", s.GetStatus(job.Id))
 			time.Sleep(job.BuildDuration)
 			s.SetStatus(job.Id, statusCompleted)
+			m.SetJobsCompleted(1)
+			m.SetJobActive(-1)
 			fmt.Println("id:", job.Id, "status:", s.GetStatus(job.Id))
 			jobWg.Done()
 		}
@@ -167,12 +217,23 @@ func BuildJob(job Job) error {
 	return nil
 }
 
-func RetryFailedJob(s *JobStore, job Job, delay time.Duration) {
+func RetryFailedJob(s *JobStore, job Job, delay time.Duration, ctx context.Context) {
 	go func() {
-		time.Sleep(delay)
-		s.SetStatus(job.Id, statusPending)
-		fmt.Println("id:", job.Id, "status:", s.GetStatus(job.Id))
-		JobQeue <- job
+		select {
+		case <-time.After(delay):
+
+			select {
+			case <-ctx.Done():
+				return
+			default:
+				// delayed retry
+				s.SetStatus(job.Id, statusPending)
+				fmt.Println("id:", job.Id, "status:", s.GetStatus(job.Id))
+				JobQeue <- job
+
+			}
+		}
+
 	}()
 
 }
