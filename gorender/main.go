@@ -151,10 +151,6 @@ func main() {
 	}
 
 	// pushing jobs to queue
-	JobSubmitter(&jobWg, Job{Id: 1, Name: "Test", BuildDuration: time.Second, currentAttempt: 0, failedAttempts: 0}, NewJobStore, NewMetrics)
-	JobSubmitter(&jobWg, Job{Id: 2, Name: "Test", BuildDuration: time.Second, currentAttempt: 0, failedAttempts: 1}, NewJobStore, NewMetrics)
-	JobSubmitter(&jobWg, Job{Id: 3, Name: "Test", BuildDuration: time.Second, currentAttempt: 0, failedAttempts: 2}, NewJobStore, NewMetrics)
-	JobSubmitter(&jobWg, Job{Id: 4, Name: "Test", BuildDuration: time.Second, currentAttempt: 0, failedAttempts: 4}, NewJobStore, NewMetrics)
 
 	// wating for goroutines to finish executions
 	jobsDone := make(chan struct{})
@@ -165,17 +161,14 @@ func main() {
 		close(jobsDone)
 	}()
 
-	select {
-	case <-jobsDone:
-		fmt.Println("All Jobs processed")
-	case <-ctx.Done():
-		fmt.Print("Interuption has occured")
-	}
-	//
-	close(JobQeue)
-	workerWg.Wait()
+	StartServer(ctx, &jobWg, NewJobStore, NewMetrics)
+
+	<- ctx.Done(); 
 	// closing the queue
-	NewMetrics.GetMetrics()
+	close(JobQeue)
+	// wating for worker's to finish current work
+	workerWg.Wait()
+	// starting the server
 }
 func JobSubmitter(jobWg *sync.WaitGroup, job Job, s *JobStore, m *Metrics) {
 	m.SetJobsSubmitted(1)
